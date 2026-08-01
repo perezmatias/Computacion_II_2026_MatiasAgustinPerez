@@ -5,24 +5,24 @@ from analizadores.memoria import iniciar_analizador_memoria
 from analizadores.fds import iniciar_analizador_fds
 from analizadores.sistema import iniciar_analizador_sistema
 from analizadores.threads import iniciar_analizador_threads
+from analizadores.senales import iniciar_analizador_senales # <-- NUEVA IMPORTACIÓN
 
 def main():
     print("=== MONITOR DE PROCESOS Y THREADS ===")
 
-    # 1. MEMORIA COMPARTIDA (Snapshot Global con Manager)
+    # 1. MEMORIA COMPARTIDA
     manager = multiprocessing.Manager()
     snapshot_global = manager.dict()
     
-    # Inicializamos las claves vacías en el diccionario compartido
     snapshot_global['memoria'] = {}
     snapshot_global['fds'] = {}
     snapshot_global['sistema'] = {}
     snapshot_global['threads'] = {}
-    snapshot_global['senales'] = {}
+    snapshot_global['senales'] = {} # <-- INICIALIZAMOS SEÑALES
     snapshot_global['scheduling'] = {}
     snapshot_global['resumen'] = {}
 
-    # 2. COMUNICACIÓN IPC (Colas independientes por analizador)
+    # 2. COMUNICACIÓN IPC
     colas_analizadores = {
         'resumen': multiprocessing.Queue(),
         'memoria': multiprocessing.Queue(),
@@ -36,60 +36,47 @@ def main():
     # 3. CREACIÓN Y CONFIGURACIÓN DE PROCESOS
     procesos = []
 
-    # Proceso Recolector (Productor)
-    p_recolector = multiprocessing.Process(
-        target=iniciar_recolector, 
-        args=(colas_analizadores,)
-    )
+    p_recolector = multiprocessing.Process(target=iniciar_recolector, args=(colas_analizadores,))
     procesos.append(p_recolector)
 
-    # Analizador de Memoria
-    p_memoria = multiprocessing.Process(
-        target=iniciar_analizador_memoria,
-        args=(colas_analizadores['memoria'], snapshot_global)
-    )
+    p_memoria = multiprocessing.Process(target=iniciar_analizador_memoria, args=(colas_analizadores['memoria'], snapshot_global))
     procesos.append(p_memoria)
 
-    # Analizador de FDs
-    p_fds = multiprocessing.Process(
-        target=iniciar_analizador_fds,
-        args=(colas_analizadores['fds'], snapshot_global)
-    )
+    p_fds = multiprocessing.Process(target=iniciar_analizador_fds, args=(colas_analizadores['fds'], snapshot_global))
     procesos.append(p_fds)
 
-    # Analizador de Sistema
-    p_sistema = multiprocessing.Process(
-        target=iniciar_analizador_sistema,
-        args=(colas_analizadores['sistema'], snapshot_global)
-    )
+    p_sistema = multiprocessing.Process(target=iniciar_analizador_sistema, args=(colas_analizadores['sistema'], snapshot_global))
     procesos.append(p_sistema)
 
-    # Analizador de Threads
-    p_threads = multiprocessing.Process(
-        target=iniciar_analizador_threads,
-        args=(colas_analizadores['threads'], snapshot_global)
-    )
+    p_threads = multiprocessing.Process(target=iniciar_analizador_threads, args=(colas_analizadores['threads'], snapshot_global))
     procesos.append(p_threads)
 
-    # 4. ARRANQUE DE TODOS LOS PROCESOS EN PARALELO
+    # <-- NUEVO PROCESO DE SEÑALES
+    p_senales = multiprocessing.Process(
+        target=iniciar_analizador_senales,
+        args=(colas_analizadores['senales'], snapshot_global)
+    )
+    procesos.append(p_senales)
+
+    # 4. ARRANQUE EN PARALELO
     for p in procesos:
         p.start()
 
     try:
-        # Loop principal de monitoreo en consola para verificar el estado del snapshot
+        # Loop principal de monitoreo en consola
         while True:
             time.sleep(2)
             mem_count = len(snapshot_global.get('memoria', {}))
             fds_count = len(snapshot_global.get('fds', {}))
             sis_count = len(snapshot_global.get('sistema', {}))
             thr_count = len(snapshot_global.get('threads', {}))
+            sen_count = len(snapshot_global.get('senales', {}))
             
-            print(f"[MAIN] Snapshot activo -> Memoria: {mem_count} | FDs: {fds_count} | Sistema: {sis_count} | Threads: {thr_count} (PIDs procesados)")
+            print(f"[MAIN] Memoria: {mem_count} | FDs: {fds_count} | Sistema: {sis_count} | Threads: {thr_count} | Señales: {sen_count}")
             
     except KeyboardInterrupt:
         print("\n[MAIN] Apagando monitor (SIGINT detectado)...")
     finally:
-        # Shutdown limpio de todos los procesos hijos
         for p in procesos:
             p.terminate()
             p.join()
