@@ -2,9 +2,6 @@ import os
 import time
 
 def obtener_pids():
-    """
-    Lee directamente /proc y devuelve una lista con los PIDs válidos.
-    """
     pids = []
     try:
         # Listamos el directorio /proc
@@ -14,22 +11,16 @@ def obtener_pids():
                 pids.append(elemento)
     except FileNotFoundError:
         pass
-    
     return pids
 
-def iniciar_recolector(cola_pids, intervalo=2.0):
-    """
-    Función objetivo del proceso Recolector.
-    Se ejecuta en un loop infinito enviando datos por la cola.
-    """
-    print("[RECOLECTOR] Proceso iniciado y leyendo /proc...")
+def iniciar_recolector(colas, intervalo=2.0):
+    print("[RECOLECTOR] Proceso iniciado y repartiendo trabajo...")
     
     while True:
-        # Obtenemos la lista de PIDs vivos en este instante
         pids = obtener_pids()
         
-        # Metemos la lista completa en la cola de comunicación
-        cola_pids.put(pids)
+        # Multiplexación: enviamos copia a cada cola
+        for nombre_analizador, cola_especifica in colas.items():
+            cola_especifica.put(pids)
         
-        # Pausa antes del próximo escaneo (esto luego se configurará dinámicamente)
         time.sleep(intervalo)

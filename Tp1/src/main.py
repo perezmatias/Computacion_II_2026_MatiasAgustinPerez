@@ -5,35 +5,34 @@ from recolector import iniciar_recolector
 def main():
     print("Iniciando Monitor de Procesos...")
 
-    # 1. Creamos la Cola de comunicación (IPC)
-    cola_pids = multiprocessing.Queue()
+    # Creamos un diccionario con una cola independiente para cada analizador
+    colas_analizadores = {
+        'resumen': multiprocessing.Queue(),
+        'memoria': multiprocessing.Queue(),
+        'fds': multiprocessing.Queue(),
+        'threads': multiprocessing.Queue(),
+        'senales': multiprocessing.Queue(),
+        'scheduling': multiprocessing.Queue(),
+        'sistema': multiprocessing.Queue()
+    }
 
-    # 2. Definimos el proceso Recolector
-    # Le pasamos la cola para que sepa dónde guardar los PIDs que encuentre
+    # Definimos el proceso Recolector y le pasamos todas las colas
     proceso_recolector = multiprocessing.Process(
         target=iniciar_recolector, 
-        args=(cola_pids,)
+        args=(colas_analizadores,)
     )
 
-    # 3. Iniciamos el proceso
+    # Iniciamos el recolector
     proceso_recolector.start()
 
-    # (Acá a futuro irán los procesos de los analizadores y el agregador)
-
     try:
-        # Un loop infinito temporal solo para mantener vivo el proceso principal
-        # y ver cómo la cola se va llenando.
+        # Loop temporal para probar
         while True:
-            # Leemos de la cola (si hay algo) sin bloquear el proceso
-            if not cola_pids.empty():
-                pids_actuales = cola_pids.get()
-                print(f"[MAIN] PIDs recibidos desde la cola: {len(pids_actuales)} procesos encontrados.")
             time.sleep(2)
             
     except KeyboardInterrupt:
-        print("\nApagando monitor (SIGINT detectado)...")
+        print("\nApagando monitor...")
     finally:
-        # Limpieza de procesos (Shutdown limpio)
         proceso_recolector.terminate()
         proceso_recolector.join()
         print("Monitor apagado correctamente.")
