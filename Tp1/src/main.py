@@ -4,20 +4,25 @@ from recolector import iniciar_recolector
 from analizadores.memoria import iniciar_analizador_memoria
 from analizadores.fds import iniciar_analizador_fds
 from analizadores.sistema import iniciar_analizador_sistema
+from analizadores.threads import iniciar_analizador_threads
 
 def main():
     print("=== MONITOR DE PROCESOS Y THREADS ===")
 
-    # 1. MEMORIA COMPARTIDA (Snapshot Global)
+    # 1. MEMORIA COMPARTIDA (Snapshot Global con Manager)
     manager = multiprocessing.Manager()
     snapshot_global = manager.dict()
     
-    # Inicializamos las claves vacías
+    # Inicializamos las claves vacías en el diccionario compartido
     snapshot_global['memoria'] = {}
     snapshot_global['fds'] = {}
     snapshot_global['sistema'] = {}
+    snapshot_global['threads'] = {}
+    snapshot_global['senales'] = {}
+    snapshot_global['scheduling'] = {}
+    snapshot_global['resumen'] = {}
 
-    # 2. COMUNICACIÓN IPC (Colas independientes)
+    # 2. COMUNICACIÓN IPC (Colas independientes por analizador)
     colas_analizadores = {
         'resumen': multiprocessing.Queue(),
         'memoria': multiprocessing.Queue(),
@@ -28,10 +33,10 @@ def main():
         'sistema': multiprocessing.Queue()
     }
 
-    # 3. CREACIÓN Y ARRANQUE DE PROCESOS
+    # 3. CREACIÓN Y CONFIGURACIÓN DE PROCESOS
     procesos = []
 
-    # Proceso Recolector
+    # Proceso Recolector (Productor)
     p_recolector = multiprocessing.Process(
         target=iniciar_recolector, 
         args=(colas_analizadores,)
@@ -59,19 +64,27 @@ def main():
     )
     procesos.append(p_sistema)
 
-    # Iniciamos todos los procesos
+    # Analizador de Threads
+    p_threads = multiprocessing.Process(
+        target=iniciar_analizador_threads,
+        args=(colas_analizadores['threads'], snapshot_global)
+    )
+    procesos.append(p_threads)
+
+    # 4. ARRANQUE DE TODOS LOS PROCESOS EN PARALELO
     for p in procesos:
         p.start()
 
     try:
-        # Loop principal que muestra el estado del snapshot global en tiempo real
+        # Loop principal de monitoreo en consola para verificar el estado del snapshot
         while True:
             time.sleep(2)
             mem_count = len(snapshot_global.get('memoria', {}))
             fds_count = len(snapshot_global.get('fds', {}))
             sis_count = len(snapshot_global.get('sistema', {}))
+            thr_count = len(snapshot_global.get('threads', {}))
             
-            print(f"[MAIN] Snapshot activo -> Memoria: {mem_count} PIDs | FDs: {fds_count} PIDs | Sistema: {sis_count} PIDs")
+            print(f"[MAIN] Snapshot activo -> Memoria: {mem_count} | FDs: {fds_count} | Sistema: {sis_count} | Threads: {thr_count} (PIDs procesados)")
             
     except KeyboardInterrupt:
         print("\n[MAIN] Apagando monitor (SIGINT detectado)...")
