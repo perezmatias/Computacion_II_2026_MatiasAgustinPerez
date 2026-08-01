@@ -1,5 +1,6 @@
 import multiprocessing
 import time
+import curses # <-- NUEVO
 from recolector import iniciar_recolector
 from analizadores.memoria import iniciar_analizador_memoria
 from analizadores.fds import iniciar_analizador_fds
@@ -7,12 +8,11 @@ from analizadores.sistema import iniciar_analizador_sistema
 from analizadores.threads import iniciar_analizador_threads
 from analizadores.senales import iniciar_analizador_senales
 from analizadores.scheduling import iniciar_analizador_scheduling
-from analizadores.resumen import iniciar_analizador_resumen # <-- IMPORTAMOS RESUMEN
+from analizadores.resumen import iniciar_analizador_resumen
+from tui import dibujar_interfaz # <-- NUEVA IMPORTACIÓN
 
 def main():
-    print("=== MONITOR DE PROCESOS Y THREADS (MOTOR INICIADO) ===")
-
-    # 1. MEMORIA COMPARTIDA (El pizarrón central)
+    # 1. MEMORIA COMPARTIDA
     manager = multiprocessing.Manager()
     snapshot_global = manager.dict()
     
@@ -22,9 +22,9 @@ def main():
     snapshot_global['threads'] = {}
     snapshot_global['senales'] = {}
     snapshot_global['scheduling'] = {}
-    snapshot_global['resumen'] = {} # <-- INICIALIZAMOS RESUMEN
+    snapshot_global['resumen'] = {}
 
-    # 2. COMUNICACIÓN IPC (Las 7 bandejas de entrada)
+    # 2. COMUNICACIÓN IPC
     colas_analizadores = {
         'resumen': multiprocessing.Queue(),
         'memoria': multiprocessing.Queue(),
@@ -35,7 +35,7 @@ def main():
         'sistema': multiprocessing.Queue()
     }
 
-    # 3. CREACIÓN DE LA ORQUESTA (Procesos)
+    # 3. CREACIÓN Y ARRANQUE DE PROCESOS (Motor de recolección)
     procesos = []
 
     p_recolector = multiprocessing.Process(target=iniciar_recolector, args=(colas_analizadores,))
@@ -62,25 +62,22 @@ def main():
     p_scheduling = multiprocessing.Process(target=iniciar_analizador_scheduling, args=(colas_analizadores['scheduling'], snapshot_global))
     procesos.append(p_scheduling)
 
-    # 4. ARRANQUE EN PARALELO
     for p in procesos:
         p.start()
 
+    # 4. INTERFAZ GRÁFICA (Bloquea el main thread hasta que apretes 'q')
     try:
-        # Loop principal (Por ahora imprime en consola, luego será la TUI)
-        while True:
-            time.sleep(2)
-            res_count = len(snapshot_global.get('resumen', {}))
-            
-            print(f"[MAIN] ¡Motor corriendo! {res_count} procesos monitoreados simultáneamente en 7 módulos.")
+        # Curses toma el control total de la terminal
+        curses.wrapper(dibujar_interfaz, snapshot_global)
             
     except KeyboardInterrupt:
-        print("\n[MAIN] Apagando monitor (SIGINT detectado)...")
+        pass # Ctrl+C capturado
     finally:
+        # Una vez que salimos de curses (por la 'q' o Ctrl+C), apagamos todo limpio
         for p in procesos:
             p.terminate()
             p.join()
-        print("[MAIN] Todos los procesos finalizados correctamente.")
+        print("Monitor apagado correctamente.")
 
 if __name__ == "__main__":
     main()
