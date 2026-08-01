@@ -1,0 +1,9 @@
+services:
+  monitor:
+    build: .
+    # Estas dos líneas son OBLIGATORIAS para que la TUI funcione y no se cuelgue
+    tty: true
+    stdin_open: true
+    volumes:
+      # Sincronizamos el código de tu PC con el contenedor para no tener que reconstruir a cada rato
+      - .:/app
