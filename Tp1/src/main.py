@@ -1,6 +1,8 @@
 import multiprocessing
 import time
-import curses # <-- NUEVO
+import curses
+import signal
+import json
 from recolector import iniciar_recolector
 from analizadores.memoria import iniciar_analizador_memoria
 from analizadores.fds import iniciar_analizador_fds
@@ -9,20 +11,15 @@ from analizadores.threads import iniciar_analizador_threads
 from analizadores.senales import iniciar_analizador_senales
 from analizadores.scheduling import iniciar_analizador_scheduling
 from analizadores.resumen import iniciar_analizador_resumen
-from tui import dibujar_interfaz # <-- NUEVA IMPORTACIÓN
+from tui import dibujar_interfaz
 
 def main():
     # 1. MEMORIA COMPARTIDA
     manager = multiprocessing.Manager()
     snapshot_global = manager.dict()
     
-    snapshot_global['memoria'] = {}
-    snapshot_global['fds'] = {}
-    snapshot_global['sistema'] = {}
-    snapshot_global['threads'] = {}
-    snapshot_global['senales'] = {}
-    snapshot_global['scheduling'] = {}
-    snapshot_global['resumen'] = {}
+    for clave in ['memoria', 'fds', 'sistema', 'threads', 'senales', 'scheduling', 'resumen']:
+        snapshot_global[clave] = {}
 
     # 2. COMUNICACIÓN IPC
     colas_analizadores = {
@@ -35,45 +32,40 @@ def main():
         'sistema': multiprocessing.Queue()
     }
 
-    # 3. CREACIÓN Y ARRANQUE DE PROCESOS (Motor de recolección)
+    # 3. CREACIÓN Y ARRANQUE DE PROCESOS
     procesos = []
-
-    p_recolector = multiprocessing.Process(target=iniciar_recolector, args=(colas_analizadores,))
-    procesos.append(p_recolector)
-
-    p_resumen = multiprocessing.Process(target=iniciar_analizador_resumen, args=(colas_analizadores['resumen'], snapshot_global))
-    procesos.append(p_resumen)
-
-    p_memoria = multiprocessing.Process(target=iniciar_analizador_memoria, args=(colas_analizadores['memoria'], snapshot_global))
-    procesos.append(p_memoria)
-
-    p_fds = multiprocessing.Process(target=iniciar_analizador_fds, args=(colas_analizadores['fds'], snapshot_global))
-    procesos.append(p_fds)
-
-    p_sistema = multiprocessing.Process(target=iniciar_analizador_sistema, args=(colas_analizadores['sistema'], snapshot_global))
-    procesos.append(p_sistema)
-
-    p_threads = multiprocessing.Process(target=iniciar_analizador_threads, args=(colas_analizadores['threads'], snapshot_global))
-    procesos.append(p_threads)
-
-    p_senales = multiprocessing.Process(target=iniciar_analizador_senales, args=(colas_analizadores['senales'], snapshot_global))
-    procesos.append(p_senales)
-
-    p_scheduling = multiprocessing.Process(target=iniciar_analizador_scheduling, args=(colas_analizadores['scheduling'], snapshot_global))
-    procesos.append(p_scheduling)
+    procesos.append(multiprocessing.Process(target=iniciar_recolector, args=(colas_analizadores,)))
+    procesos.append(multiprocessing.Process(target=iniciar_analizador_resumen, args=(colas_analizadores['resumen'], snapshot_global)))
+    procesos.append(multiprocessing.Process(target=iniciar_analizador_memoria, args=(colas_analizadores['memoria'], snapshot_global)))
+    procesos.append(multiprocessing.Process(target=iniciar_analizador_fds, args=(colas_analizadores['fds'], snapshot_global)))
+    procesos.append(multiprocessing.Process(target=iniciar_analizador_sistema, args=(colas_analizadores['sistema'], snapshot_global)))
+    procesos.append(multiprocessing.Process(target=iniciar_analizador_threads, args=(colas_analizadores['threads'], snapshot_global)))
+    procesos.append(multiprocessing.Process(target=iniciar_analizador_senales, args=(colas_analizadores['senales'], snapshot_global)))
+    procesos.append(multiprocessing.Process(target=iniciar_analizador_scheduling, args=(colas_analizadores['scheduling'], snapshot_global)))
 
     for p in procesos:
         p.start()
 
-    # 4. INTERFAZ GRÁFICA (Bloquea el main thread hasta que apretes 'q')
-    try:
-        # Curses toma el control total de la terminal
-        curses.wrapper(dibujar_interfaz, snapshot_global)
+    # --- MANEJO DE SEÑALES ---
+    def manejador_dump(signum, frame):
+        """Atrapa SIGUSR1 y guarda el snapshot actual en un JSON."""
+        # Convertimos el Manager.dict a un diccionario normal de Python
+        estado_actual = {k: v for k, v in snapshot_global.items()}
+        try:
+            with open("dump_estado.json", "w") as archivo:
+                json.dump(estado_actual, archivo, indent=4)
+        except Exception:
+            pass
             
+    # Le decimos al S.O. que si llega la señal SIGUSR1, ejecute la función
+    signal.signal(signal.SIGUSR1, manejador_dump)
+
+    # 4. INTERFAZ GRÁFICA
+    try:
+        curses.wrapper(dibujar_interfaz, snapshot_global)
     except KeyboardInterrupt:
-        pass # Ctrl+C capturado
+        pass # Apagado limpio con Ctrl+C (SIGINT)
     finally:
-        # Una vez que salimos de curses (por la 'q' o Ctrl+C), apagamos todo limpio
         for p in procesos:
             p.terminate()
             p.join()
