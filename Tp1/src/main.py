@@ -5,7 +5,8 @@ from analizadores.memoria import iniciar_analizador_memoria
 from analizadores.fds import iniciar_analizador_fds
 from analizadores.sistema import iniciar_analizador_sistema
 from analizadores.threads import iniciar_analizador_threads
-from analizadores.senales import iniciar_analizador_senales # <-- NUEVA IMPORTACIÓN
+from analizadores.senales import iniciar_analizador_senales
+from analizadores.scheduling import iniciar_analizador_scheduling # <-- NUEVA IMPORTACIÓN
 
 def main():
     print("=== MONITOR DE PROCESOS Y THREADS ===")
@@ -18,8 +19,8 @@ def main():
     snapshot_global['fds'] = {}
     snapshot_global['sistema'] = {}
     snapshot_global['threads'] = {}
-    snapshot_global['senales'] = {} # <-- INICIALIZAMOS SEÑALES
-    snapshot_global['scheduling'] = {}
+    snapshot_global['senales'] = {}
+    snapshot_global['scheduling'] = {} # <-- INICIALIZAMOS SCHEDULING
     snapshot_global['resumen'] = {}
 
     # 2. COMUNICACIÓN IPC
@@ -51,12 +52,15 @@ def main():
     p_threads = multiprocessing.Process(target=iniciar_analizador_threads, args=(colas_analizadores['threads'], snapshot_global))
     procesos.append(p_threads)
 
-    # <-- NUEVO PROCESO DE SEÑALES
-    p_senales = multiprocessing.Process(
-        target=iniciar_analizador_senales,
-        args=(colas_analizadores['senales'], snapshot_global)
-    )
+    p_senales = multiprocessing.Process(target=iniciar_analizador_senales, args=(colas_analizadores['senales'], snapshot_global))
     procesos.append(p_senales)
+
+    # <-- NUEVO PROCESO DE SCHEDULING
+    p_scheduling = multiprocessing.Process(
+        target=iniciar_analizador_scheduling,
+        args=(colas_analizadores['scheduling'], snapshot_global)
+    )
+    procesos.append(p_scheduling)
 
     # 4. ARRANQUE EN PARALELO
     for p in procesos:
@@ -71,8 +75,10 @@ def main():
             sis_count = len(snapshot_global.get('sistema', {}))
             thr_count = len(snapshot_global.get('threads', {}))
             sen_count = len(snapshot_global.get('senales', {}))
+            sch_count = len(snapshot_global.get('scheduling', {})) # <-- LECTURA DE SCHEDULING
             
-            print(f"[MAIN] Memoria: {mem_count} | FDs: {fds_count} | Sistema: {sis_count} | Threads: {thr_count} | Señales: {sen_count}")
+            # Print actualizado
+            print(f"[MAIN] Memoria: {mem_count} | FDs: {fds_count} | Sist: {sis_count} | Threads: {thr_count} | Señ: {sen_count} | Sched: {sch_count}")
             
     except KeyboardInterrupt:
         print("\n[MAIN] Apagando monitor (SIGINT detectado)...")
