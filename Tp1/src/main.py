@@ -1,24 +1,23 @@
 import multiprocessing
 import time
 from recolector import iniciar_recolector
-# Importamos la función de nuestro nuevo analizador
 from analizadores.memoria import iniciar_analizador_memoria
+from analizadores.fds import iniciar_analizador_fds
+from analizadores.sistema import iniciar_analizador_sistema
 
 def main():
-    print("Iniciando Monitor de Procesos...")
+    print("=== MONITOR DE PROCESOS Y THREADS ===")
 
-    # --- MEMORIA COMPARTIDA ---
-    # Creamos el Manager. Esto levanta un proceso "servidor" invisible
+    # 1. MEMORIA COMPARTIDA (Snapshot Global)
     manager = multiprocessing.Manager()
-    
-    # Este es nuestro "pizarrón global" seguro para multiprocesos
     snapshot_global = manager.dict()
     
-    # Inicializamos la clave de memoria vacía para que la interfaz gráfica
-    # no tire error si intenta leer antes de que el analizador escriba algo.
+    # Inicializamos las claves vacías
     snapshot_global['memoria'] = {}
+    snapshot_global['fds'] = {}
+    snapshot_global['sistema'] = {}
 
-    # --- COMUNICACIÓN (COLAS) ---
+    # 2. COMUNICACIÓN IPC (Colas independientes)
     colas_analizadores = {
         'resumen': multiprocessing.Queue(),
         'memoria': multiprocessing.Queue(),
@@ -29,38 +28,59 @@ def main():
         'sistema': multiprocessing.Queue()
     }
 
-    # --- LEVANTAMOS LOS PROCESOS ---
-    # 1. El Recolector (le pasamos todas las colas)
-    proceso_recolector = multiprocessing.Process(
+    # 3. CREACIÓN Y ARRANQUE DE PROCESOS
+    procesos = []
+
+    # Proceso Recolector
+    p_recolector = multiprocessing.Process(
         target=iniciar_recolector, 
         args=(colas_analizadores,)
     )
-    proceso_recolector.start()
+    procesos.append(p_recolector)
 
-    # 2. El Analizador de Memoria (le pasamos SU cola y el pizarrón global)
-    proceso_memoria = multiprocessing.Process(
+    # Analizador de Memoria
+    p_memoria = multiprocessing.Process(
         target=iniciar_analizador_memoria,
         args=(colas_analizadores['memoria'], snapshot_global)
     )
-    proceso_memoria.start()
+    procesos.append(p_memoria)
+
+    # Analizador de FDs
+    p_fds = multiprocessing.Process(
+        target=iniciar_analizador_fds,
+        args=(colas_analizadores['fds'], snapshot_global)
+    )
+    procesos.append(p_fds)
+
+    # Analizador de Sistema
+    p_sistema = multiprocessing.Process(
+        target=iniciar_analizador_sistema,
+        args=(colas_analizadores['sistema'], snapshot_global)
+    )
+    procesos.append(p_sistema)
+
+    # Iniciamos todos los procesos
+    for p in procesos:
+        p.start()
 
     try:
-        # Loop temporal para verificar que el snapshot se está llenando
+        # Loop principal que muestra el estado del snapshot global en tiempo real
         while True:
-            # Leemos directamente del snapshot global
-            diccionario_memoria = snapshot_global['memoria']
-            print(f"[MAIN] Snapshot global actualizado: {len(diccionario_memoria)} procesos en memoria.")
-            time.sleep(3)
+            time.sleep(2)
+            mem_count = len(snapshot_global.get('memoria', {}))
+            fds_count = len(snapshot_global.get('fds', {}))
+            sis_count = len(snapshot_global.get('sistema', {}))
+            
+            print(f"[MAIN] Snapshot activo -> Memoria: {mem_count} PIDs | FDs: {fds_count} PIDs | Sistema: {sis_count} PIDs")
             
     except KeyboardInterrupt:
-        print("\nApagando monitor...")
+        print("\n[MAIN] Apagando monitor (SIGINT detectado)...")
     finally:
-        # Limpieza de procesos al salir con Ctrl+C
-        proceso_recolector.terminate()
-        proceso_memoria.terminate()
-        proceso_recolector.join()
-        proceso_memoria.join()
-        print("Monitor apagado correctamente.")
+        # Shutdown limpio de todos los procesos hijos
+        for p in procesos:
+            p.terminate()
+            p.join()
+        print("[MAIN] Todos los procesos finalizados correctamente.")
 
 if __name__ == "__main__":
     main()
