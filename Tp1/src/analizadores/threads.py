@@ -28,11 +28,31 @@ def leer_nombre_thread(pid, tid):
         return "?"
 
 
+def leer_ctxt_switches_thread(pid, tid):
+    """
+    Igual que en scheduling.py pero a nivel de thread individual:
+    /proc/<pid>/task/<tid>/status tiene sus propios contadores de
+    context switches (independientes de los del proceso).
+    """
+    voluntarios = involuntarios = "N/A"
+    try:
+        with open(f"/proc/{pid}/task/{tid}/status", 'r') as f:
+            for linea in f:
+                if linea.startswith("voluntary_ctxt_switches:"):
+                    voluntarios = linea.split()[1]
+                elif linea.startswith("nonvoluntary_ctxt_switches:"):
+                    involuntarios = linea.split()[1]
+    except (FileNotFoundError, PermissionError):
+        pass
+    return voluntarios, involuntarios
+
+
 def iniciar_analizador_threads(cola_in, snapshot_global, intervalo_compartido):
     """
     Proceso que lee PIDs, enumera los threads (LWPs) de cada uno en
-    /proc/<pid>/task/, y calcula estado + %CPU por thread usando delta
-    de jiffies (mismo criterio que sistema.py, pero a nivel de hilo).
+    /proc/<pid>/task/, y calcula estado + %CPU + context switches por
+    thread usando delta de jiffies (mismo criterio que sistema.py, pero
+    a nivel de hilo individual).
     """
     print("[THREADS] Analizador listo y esperando PIDs...")
 
@@ -77,11 +97,15 @@ def iniciar_analizador_threads(cola_in, snapshot_global, intervalo_compartido):
 
                     lecturas_previas[clave] = (jiffies_totales, ahora)
 
+                    voluntarios, involuntarios = leer_ctxt_switches_thread(pid, tid)
+
                     detalle.append({
                         "tid": tid,
                         "nombre": leer_nombre_thread(pid, tid),
                         "estado": ESTADOS.get(estado_letra, estado_letra),
                         "cpu_pct": round(cpu_pct, 1),
+                        "ctxt_voluntarios": voluntarios,
+                        "ctxt_involuntarios": involuntarios,
                     })
 
                 datos_threads[pid] = {

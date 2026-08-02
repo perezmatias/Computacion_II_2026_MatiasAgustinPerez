@@ -72,6 +72,57 @@ def contar_procesos_por_estado():
             continue
     return conteo, total_threads
 
+
+def _parsear_kb(valor_str):
+    """Convierte 'VmRSS: 12345 kB' o '12345 kB' -> 12345 (int)."""
+    if not valor_str or valor_str == "N/A":
+        return 0
+    try:
+        return int(valor_str.split()[0])
+    except (ValueError, IndexError):
+        return 0
+
+
+def calcular_top3(snapshot_global):
+    """
+    Deriva el top 3 por CPU% (cruzando el dict 'sistema') y el top 3 por
+    RSS (cruzando el dict 'memoria'), agregando el nombre desde 'resumen'
+    para que sea legible en pantalla. Esta función SOLO lee del snapshot
+    (no escribe otras claves), así que no compite con los analizadores que
+    escriben 'sistema'/'memoria'/'resumen' - cada uno sigue siendo dueño
+    exclusivo de su propia clave.
+    """
+    sistema = snapshot_global.get('sistema', {})
+    memoria = snapshot_global.get('memoria', {})
+    resumen = snapshot_global.get('resumen', {})
+
+    por_cpu = sorted(
+        sistema.items(), key=lambda item: item[1].get('cpu_pct', 0.0), reverse=True
+    )[:3]
+    top_cpu = [
+        {
+            "pid": pid,
+            "nombre": resumen.get(pid, {}).get('nombre', '?'),
+            "valor": datos.get('cpu_pct', 0.0),
+        }
+        for pid, datos in por_cpu
+    ]
+
+    por_mem = sorted(
+        memoria.items(), key=lambda item: _parsear_kb(item[1].get('VmRSS', '')), reverse=True
+    )[:3]
+    top_mem = [
+        {
+            "pid": pid,
+            "nombre": resumen.get(pid, {}).get('nombre', '?'),
+            "valor": _parsear_kb(datos.get('VmRSS', '')),
+        }
+        for pid, datos in por_mem
+    ]
+
+    return top_cpu, top_mem
+
+
 def iniciar_analizador_sistema_global(snapshot_global, intervalo_compartido):
     """
     No necesita cola de PIDs: siempre mira el sistema completo, no procesos
@@ -99,6 +150,7 @@ def iniciar_analizador_sistema_global(snapshot_global, intervalo_compartido):
 
         boot_time, uptime_seg = leer_boot_uptime()
         conteo_estados, total_threads = contar_procesos_por_estado()
+        top_cpu, top_mem = calcular_top3(snapshot_global)
 
         datos = {
             "cpu_pct": cpu_pct,
@@ -110,6 +162,8 @@ def iniciar_analizador_sistema_global(snapshot_global, intervalo_compartido):
             "total_procesos": sum(conteo_estados.values()),
             "total_threads": total_threads,
             "zombies": conteo_estados.get('Z', 0),
+            "top_cpu": top_cpu,
+            "top_mem": top_mem,
         }
 
         snapshot_global['sistema_global'] = datos

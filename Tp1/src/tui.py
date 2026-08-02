@@ -85,6 +85,10 @@ def dibujar_ayuda(stdscr):
         "q           Salir",
         "h / ?       Esta ayuda",
         "",
+        "Modo verbose (mas detalle por proceso) se activa/desactiva con",
+        "la señal SIGUSR2 al proceso principal, ej:",
+        "  kill -USR2 <PID_del_monitor>",
+        "",
         "Presione cualquier tecla para volver...",
     ]
     for i, linea in enumerate(lineas):
@@ -98,7 +102,126 @@ def dibujar_ayuda(stdscr):
     stdscr.nodelay(True)
 
 
-def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo):
+def formatear_detalle(vista_actual, info_vista_pid, verbose):
+    """
+    Arma el string de la columna "Detalle" para la fila de un proceso,
+    según la vista activa y si el modo verbose (SIGUSR2) está prendido.
+    Separado en su propia función para no inflar el loop de dibujado.
+    """
+    if vista_actual == '1':
+        # Resumen: PPID siempre visible; comando completo solo en verbose
+        # (suele ser largo y comerse el ancho de la fila).
+        ppid = info_vista_pid.get('ppid', '')
+        detalle = f"PPID: {ppid}"
+        if verbose:
+            detalle += f"  Cmd: {info_vista_pid.get('comando', '')}"
+        return detalle
+
+    if vista_actual == '2':
+        detalle = f"RSS: {info_vista_pid.get('VmRSS','')}  Size: {info_vista_pid.get('VmSize','')}"
+        if verbose:
+            faults = info_vista_pid.get('faults', {})
+            detalle += (
+                f"  Swap: {info_vista_pid.get('VmSwap','')}"
+                f"  HWM: {info_vista_pid.get('VmHWM','')}"
+                f"  minflt: {faults.get('minflt','')}"
+                f"  majflt: {faults.get('majflt','')}"
+            )
+        return detalle
+
+    if vista_actual == '3':
+        if verbose:
+            detalle_fds = info_vista_pid.get('detalle', [])[:4]
+            resumen_fds = " | ".join(f"{d['fd']}:{d['tipo']}" for d in detalle_fds)
+            total = info_vista_pid.get('fds_abiertos', '')
+            return f"FDs: {total}  [{resumen_fds}]" if resumen_fds else f"FDs: {total}"
+        return f"FDs: {info_vista_pid.get('fds_abiertos','')}"
+
+    if vista_actual == '4':
+        return f"Estado: {info_vista_pid.get('estado','')}  CPU%: {info_vista_pid.get('cpu_pct',0)}"
+
+    if vista_actual == '5':
+        detalle = f"Hilos: {info_vista_pid.get('cantidad_hilos','')}"
+        if verbose:
+            hilos = info_vista_pid.get('detalle', [])[:3]
+            resumen_hilos = " | ".join(
+                f"{h['tid']}:{h['estado'][:4]}:{h['cpu_pct']}%" for h in hilos
+            )
+            if resumen_hilos:
+                detalle += f"  [{resumen_hilos}]"
+        return detalle
+
+    if vista_actual == '6':
+        blk = ",".join(info_vista_pid.get('bloqueadas_nombres', []))
+        detalle = f"Bloqueadas: {blk[:30]}"
+        if verbose:
+            grp = ",".join(info_vista_pid.get('pendientes_grupo_nombres', []))
+            detalle += f"  PendGrupo: {grp[:20]}"
+        return detalle
+
+    if vista_actual == '7':
+        detalle = f"{info_vista_pid.get('politica','')} nice={info_vista_pid.get('nice','')}"
+        if verbose:
+            detalle += (
+                f" rt={info_vista_pid.get('rt_priority','')}"
+                f" cpus={info_vista_pid.get('afinidad','')}"
+                f" cswV/I={info_vista_pid.get('ctxt_voluntarios','')}/{info_vista_pid.get('ctxt_involuntarios','')}"
+                f" sid={info_vista_pid.get('sid','')} pgid={info_vista_pid.get('pgid','')}"
+            )
+        return detalle
+
+    return ""
+
+
+def dibujar_vista_global(stdscr, snapshot_global, fila_base):
+    datos = snapshot_global.get('sistema_global', {})
+    cpu = datos.get('cpu_pct', {})
+    load = datos.get('loadavg', {})
+    mem = datos.get('memoria', {})
+    top_cpu = datos.get('top_cpu', [])
+    top_mem = datos.get('top_mem', [])
+
+    f = fila_base
+    stdscr.addstr(f, 0, "CPU (%):", curses.A_BOLD); f += 1
+    stdscr.addstr(f, 2, f"user: {cpu.get('user', 0)}  system: {cpu.get('system', 0)}  idle: {cpu.get('idle', 0)}  iowait: {cpu.get('iowait', 0)}")
+    f += 2
+    stdscr.addstr(f, 0, "Load average:", curses.A_BOLD); f += 1
+    stdscr.addstr(f, 2, f"1min: {load.get('load_1min','')}  5min: {load.get('load_5min','')}  15min: {load.get('load_15min','')}")
+    f += 2
+    stdscr.addstr(f, 0, "Memoria (KB):", curses.A_BOLD); f += 1
+    stdscr.addstr(f, 2, f"Total: {mem.get('mem_total_kb','')}  Libre: {mem.get('mem_libre_kb','')}  Disponible: {mem.get('mem_disponible_kb','')}")
+    f += 1
+    stdscr.addstr(f, 2, f"Cache: {mem.get('cache_kb','')}  Swap total: {mem.get('swap_total_kb','')}  Swap libre: {mem.get('swap_libre_kb','')}")
+    f += 2
+    stdscr.addstr(f, 0, "Procesos:", curses.A_BOLD); f += 1
+    stdscr.addstr(f, 2, f"Total: {datos.get('total_procesos','')}  Threads: {datos.get('total_threads','')}  Zombies: {datos.get('zombies','')}")
+    f += 1
+    stdscr.addstr(f, 2, f"Por estado: {datos.get('procesos_por_estado', {})}")
+    f += 2
+    stdscr.addstr(f, 0, f"Uptime: {datos.get('uptime_seg','')}s   Boot time: {datos.get('boot_time','')}")
+    f += 2
+
+    stdscr.addstr(f, 0, "Top 3 CPU%:", curses.A_BOLD); f += 1
+    if top_cpu:
+        for item in top_cpu:
+            stdscr.addstr(f, 2, f"PID {item['pid']:<7} {item['nombre']:<20} {item['valor']}%")
+            f += 1
+    else:
+        stdscr.addstr(f, 2, "(sin datos todavía)")
+        f += 1
+    f += 1
+
+    stdscr.addstr(f, 0, "Top 3 Memoria (RSS):", curses.A_BOLD); f += 1
+    if top_mem:
+        for item in top_mem:
+            stdscr.addstr(f, 2, f"PID {item['pid']:<7} {item['nombre']:<20} {item['valor']} kB")
+            f += 1
+    else:
+        stdscr.addstr(f, 2, "(sin datos todavía)")
+        f += 1
+
+
+def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo, modo_verbose):
     stdscr.nodelay(True)
     stdscr.keypad(True)
     curses.curs_set(0)
@@ -115,6 +238,11 @@ def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo):
     while True:
         altura, ancho = stdscr.getmaxyx()
         filas_disponibles = max(1, altura - 5)
+
+        # Leemos el flag de verbose (toggled por SIGUSR2 en main.py) en
+        # cada vuelta del loop, así que el cambio se ve reflejado sin
+        # reiniciar el monitor - mismo patrón que los intervalos con +/-.
+        verbose_activo = bool(modo_verbose.value)
 
         tecla = stdscr.getch()
 
@@ -181,6 +309,8 @@ def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo):
 
             info_vista = limites_intervalo.get(vista_actual)
             estado_linea = f"Orden: {orden}"
+            if verbose_activo:
+                estado_linea += " | VERBOSE"
             if filtro_texto:
                 estado_linea += f" | Filtro nombre: '{filtro_texto}'"
             if filtro_usuario:
@@ -199,29 +329,7 @@ def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo):
 
         try:
             if vista_actual == '8':
-                datos = snapshot_global.get('sistema_global', {})
-                cpu = datos.get('cpu_pct', {})
-                load = datos.get('loadavg', {})
-                mem = datos.get('memoria', {})
-
-                f = fila_base
-                stdscr.addstr(f, 0, "CPU (%):", curses.A_BOLD); f += 1
-                stdscr.addstr(f, 2, f"user: {cpu.get('user', 0)}  system: {cpu.get('system', 0)}  idle: {cpu.get('idle', 0)}  iowait: {cpu.get('iowait', 0)}")
-                f += 2
-                stdscr.addstr(f, 0, "Load average:", curses.A_BOLD); f += 1
-                stdscr.addstr(f, 2, f"1min: {load.get('load_1min','')}  5min: {load.get('load_5min','')}  15min: {load.get('load_15min','')}")
-                f += 2
-                stdscr.addstr(f, 0, "Memoria (KB):", curses.A_BOLD); f += 1
-                stdscr.addstr(f, 2, f"Total: {mem.get('mem_total_kb','')}  Libre: {mem.get('mem_libre_kb','')}  Disponible: {mem.get('mem_disponible_kb','')}")
-                f += 1
-                stdscr.addstr(f, 2, f"Cache: {mem.get('cache_kb','')}  Swap total: {mem.get('swap_total_kb','')}  Swap libre: {mem.get('swap_libre_kb','')}")
-                f += 2
-                stdscr.addstr(f, 0, "Procesos:", curses.A_BOLD); f += 1
-                stdscr.addstr(f, 2, f"Total: {datos.get('total_procesos','')}  Threads: {datos.get('total_threads','')}  Zombies: {datos.get('zombies','')}")
-                f += 1
-                stdscr.addstr(f, 2, f"Por estado: {datos.get('procesos_por_estado', {})}")
-                f += 2
-                stdscr.addstr(f, 0, f"Uptime: {datos.get('uptime_seg','')}s   Boot time: {datos.get('boot_time','')}")
+                dibujar_vista_global(stdscr, snapshot_global, fila_base)
 
             elif vista_actual in VISTAS_CON_PIDS:
                 pids_visibles = obtener_pids_visibles(snapshot_global, orden, filtro_texto, filtro_usuario, pin_pid)
@@ -243,23 +351,7 @@ def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo):
                     info_resumen = resumen.get(pid, {})
                     info_vista_pid = datos_vista.get(pid, {})
 
-                    if vista_actual == '1':
-                        detalle = ""
-                    elif vista_actual == '2':
-                        detalle = f"RSS: {info_vista_pid.get('VmRSS','')}  Size: {info_vista_pid.get('VmSize','')}"
-                    elif vista_actual == '3':
-                        detalle = f"FDs: {info_vista_pid.get('fds_abiertos','')}"
-                    elif vista_actual == '4':
-                        detalle = f"Estado: {info_vista_pid.get('estado','')}  CPU%: {info_vista_pid.get('cpu_pct',0)}"
-                    elif vista_actual == '5':
-                        detalle = f"Hilos: {info_vista_pid.get('cantidad_hilos','')}"
-                    elif vista_actual == '6':
-                        blk = ",".join(info_vista_pid.get('bloqueadas_nombres', []))
-                        detalle = f"Bloqueadas: {blk[:30]}"
-                    elif vista_actual == '7':
-                        detalle = f"{info_vista_pid.get('politica','')} nice={info_vista_pid.get('nice','')}"
-                    else:
-                        detalle = ""
+                    detalle = formatear_detalle(vista_actual, info_vista_pid, verbose_activo)
 
                     marca = ">" if pid == pin_pid else " "
                     es_seleccionada = idx == fila_seleccionada

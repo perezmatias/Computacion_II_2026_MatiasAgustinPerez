@@ -59,6 +59,11 @@ def main():
         valor_inicial = config.get(f"intervalo_{clave}", info["default"])
         intervalos[clave] = multiprocessing.Value('d', valor_inicial)
 
+    # Value compartido para el modo verbose (SIGUSR2): 0 = off, 1 = on.
+    # Se lee desde la TUI para decidir cuánto detalle mostrar por proceso
+    # (más FDs visibles, más campos de memoria/scheduling, etc.)
+    modo_verbose = multiprocessing.Value('i', 0)
+
     colas_analizadores = {
         'resumen': multiprocessing.Queue(),
         'memoria': multiprocessing.Queue(),
@@ -107,12 +112,23 @@ def main():
         """SIGTERM: mismo comportamiento que Ctrl+C (SIGINT)."""
         raise KeyboardInterrupt()
 
+    def manejador_verbose(signum, frame):
+        """
+        SIGUSR2: toggle de modo verbose. No hace ningún trabajo pesado acá
+        (async-signal-safety) - solo invierte un entero en memoria compartida;
+        el trabajo real (mostrar más detalle) lo hace la TUI en su próximo
+        refresco leyendo modo_verbose.value.
+        """
+        with modo_verbose.get_lock():
+            modo_verbose.value = 0 if modo_verbose.value else 1
+
     signal.signal(signal.SIGUSR1, manejador_dump)
     signal.signal(signal.SIGHUP, manejador_reload)
     signal.signal(signal.SIGTERM, manejador_shutdown)
+    signal.signal(signal.SIGUSR2, manejador_verbose)
 
     try:
-        curses.wrapper(dibujar_interfaz, snapshot_global, intervalos, LIMITES_INTERVALO)
+        curses.wrapper(dibujar_interfaz, snapshot_global, intervalos, LIMITES_INTERVALO, modo_verbose)
     except KeyboardInterrupt:
         pass
     finally:

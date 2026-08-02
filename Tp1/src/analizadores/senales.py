@@ -28,8 +28,9 @@ def decodificar_mascara(hex_str):
 def iniciar_analizador_senales(cola_in, snapshot_global, intervalo_compartido):
     """
     Proceso que lee PIDs, parsea /proc/<pid>/status para extraer
-    las máscaras de señales, las decodifica a nombres y actualiza
-    el snapshot global.
+    las máscaras de señales (incluyendo ShdPnd, pendientes a nivel de
+    grupo de procesos, distintas de SigPnd que son pendientes del proceso
+    puntual), las decodifica a nombres y actualiza el snapshot global.
     """
     print("[SEÑALES] Analizador listo y esperando PIDs...")
 
@@ -45,11 +46,13 @@ def iniciar_analizador_senales(cola_in, snapshot_global, intervalo_compartido):
                     with open(ruta_status, 'r') as archivo:
                         lineas = archivo.readlines()
 
-                        sig_pnd = sig_blk = sig_ign = sig_cgt = "N/A"
+                        sig_pnd = sig_shd = sig_blk = sig_ign = sig_cgt = "N/A"
 
                         for linea in lineas:
                             if linea.startswith("SigPnd:"):
                                 sig_pnd = linea.split()[1]
+                            elif linea.startswith("ShdPnd:"):
+                                sig_shd = linea.split()[1]
                             elif linea.startswith("SigBlk:"):
                                 sig_blk = linea.split()[1]
                             elif linea.startswith("SigIgn:"):
@@ -59,10 +62,12 @@ def iniciar_analizador_senales(cola_in, snapshot_global, intervalo_compartido):
 
                         datos_senales[pid] = {
                             "pendientes": sig_pnd,
+                            "pendientes_grupo": sig_shd,
                             "bloqueadas": sig_blk,
                             "ignoradas": sig_ign,
                             "capturadas": sig_cgt,
                             "pendientes_nombres": decodificar_mascara(sig_pnd),
+                            "pendientes_grupo_nombres": decodificar_mascara(sig_shd),
                             "bloqueadas_nombres": decodificar_mascara(sig_blk),
                             "ignoradas_nombres": decodificar_mascara(sig_ign),
                             "capturadas_nombres": decodificar_mascara(sig_cgt),
