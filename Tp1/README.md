@@ -44,8 +44,8 @@ docker compose run --rm monitor
 Si preferís correrlo directo en tu máquina (sin Docker, requiere Linux):
 
 ```bash
-cd src
-python3 main.py
+cd Tp1
+python3 src/main.py
 ```
 
 ### Controles
@@ -86,36 +86,37 @@ Cuando está activo, aparece la palabra `VERBOSE` en la barra de estado de la TU
                      │  cada 2s (fijo)          │
                      └────────────┬─────────────┘
                                   │ reparte lista de PIDs
-                ┌─────────────────┼──────────────────────┬── ... (7 colas)
+                ┌─────────────────┼──────────────────────┬──────── ... (7 colas)
                 ▼                 ▼                      ▼
           Queue(resumen)   Queue(memoria)          Queue(scheduling)
                 │                 │                      │
                 ▼                 ▼                      ▼
-     ┌──────────────────┐ ┌──────────────┐      ┌──────────────────┐
-     │ ANALIZADOR        │ │ ANALIZADOR   │ ...  │ ANALIZADOR        │
+     ┌────────────────────┐ ┌──────────────┐      ┌───────────────────┐
+     │ ANALIZADOR         │ │ ANALIZADOR   │ ...  │ ANALIZADOR        │
      │ resumen.py         │ │ memoria.py   │      │ scheduling.py     │
      │ (proceso propio)   │ │ (proceso)    │      │ (proceso)         │
      └─────────┬──────────┘ └──────┬───────┘      └─────────┬─────────┘
-               │                    │                        │
-               └────────────┬───────┴────────────────────────┘
+               │                   │                        │
+               └────────────┬──────┴────────────────────────┘
                             ▼
-              ┌───────────────────────────────┐
-              │     SNAPSHOT GLOBAL             │
+              ┌──────────────────────────────────┐
+              │     SNAPSHOT GLOBAL              │
               │  multiprocessing.Manager().dict()│
               │  { 'resumen': {...},             │
               │    'memoria': {...},             │
               │    'fds': {...}, ... }           │
-              └───────────────┬───────────────┘
+              └───────────────┬──────────────────┘
                               │ lee (y también lee cruzado top3 CPU/mem)
                               ▼
-                    ┌─────────────────┐
+                    ┌──────────────────┐
                     │   TUI (curses)   │◄── multiprocessing.Value (intervalos, uno por vista)
                     │  proceso main    │      escritos por la TUI con +/-, leídos por analizadores
-                    └─────────────────┘      ◄── multiprocessing.Value (modo_verbose)
-                                                  escrito por el handler de SIGUSR2, leído por la TUI
+                    └──────────────────┘◄── multiprocessing.Value (modo_verbose)
+                                              escrito por el handler de SIGUSR2, leído por la TUI
 
-    analizador "sistema_global" (CPU/mem/load/top3 del sistema completo, no usa cola de PIDs;
-    lee 'sistema', 'memoria' y 'resumen' del snapshot para calcular el top3)
+
+analizador "sistema_global" (CPU/mem/load/top3 del sistema completo, no usa cola de PIDs;
+lee 'sistema', 'memoria' y 'resumen' del snapshot para calcular el top3)
 
 señales al proceso main (SIGINT/TERM/HUP/USR1/USR2) manejadas en main.py
 ```
