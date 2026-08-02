@@ -1,0 +1,10 @@
+{
+  "intervalo_resumen": 2.0,
+  "intervalo_memoria": 3.0,
+  "intervalo_fds": 5.0,
+  "intervalo_sistema": 2.0,
+  "intervalo_threads": 2.0,
+  "intervalo_senales": 10.0,
+  "intervalo_scheduling": 10.0,
+  "intervalo_sistema_global": 2.0
+}

@@ -1,38 +1,62 @@
 import os
 import time
 
-def iniciar_analizador_fds(cola_in, snapshot_global, intervalo=3.0):
+def clasificar_fd(destino):
+    """Clasifica el tipo de FD según el patrón de su symlink en /proc/<pid>/fd/N."""
+    if destino.startswith("socket:"):
+        return "socket"
+    if destino.startswith("pipe:"):
+        return "pipe"
+    if destino.startswith("/dev/pts/") or destino == "/dev/tty":
+        return "tty"
+    if destino.startswith("anon_inode:"):
+        return "anon_inode"
+    if destino.startswith("/dev/"):
+        return "device"
+    return "file"
+
+
+def iniciar_analizador_fds(cola_in, snapshot_global, intervalo_compartido):
     """
-    Proceso que lee PIDs, cuenta los File Descriptors en /proc/<pid>/fd/
-    y actualiza el snapshot global.
+    Proceso que lee PIDs, lista los File Descriptors en /proc/<pid>/fd/,
+    resuelve su destino con readlink y clasifica el tipo.
     """
     print("[FDS] Analizador listo y esperando PIDs...")
-    
+
     while True:
         if not cola_in.empty():
             pids = cola_in.get()
             datos_fds = {}
-            
+
             for pid in pids:
                 ruta_fd = f"/proc/{pid}/fd"
-                
+
                 try:
-                    # Listamos la carpeta y contamos la longitud de esa lista
-                    cantidad_fds = len(os.listdir(ruta_fd))
-                    
-                    # Guardamos el dato real
-                    datos_fds[pid] = {"fds_abiertos": cantidad_fds}
-                    
+                    entradas = os.listdir(ruta_fd)
+                    detalle = []
+
+                    for fd_num in entradas:
+                        try:
+                            destino = os.readlink(f"{ruta_fd}/{fd_num}")
+                            tipo = clasificar_fd(destino)
+                            detalle.append({
+                                "fd": fd_num,
+                                "destino": destino,
+                                "tipo": tipo,
+                            })
+                        except (FileNotFoundError, PermissionError, OSError):
+                            continue
+
+                    datos_fds[pid] = {
+                        "fds_abiertos": len(entradas),
+                        "detalle": detalle,
+                    }
+
                 except FileNotFoundError:
-                    # El proceso murió
                     pass
                 except PermissionError:
-                    # DATO CLAVE: En Linux, si no sos superusuario (root), 
-                    # el sistema te deniega el permiso para ver los FDs de otros usuarios.
-                    # Simplemente lo ignoramos o le ponemos "N/A"
-                    pass
-                
-            # Actualizamos el pizarrón global
+                    datos_fds[pid] = {"fds_abiertos": "N/A (permiso denegado)", "detalle": []}
+
             snapshot_global['fds'] = datos_fds
-            
-        time.sleep(intervalo)
+
+        time.sleep(intervalo_compartido.value)

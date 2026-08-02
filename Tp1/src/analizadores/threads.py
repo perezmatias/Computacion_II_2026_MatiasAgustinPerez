@@ -1,31 +1,98 @@
 import os
 import time
 
-def iniciar_analizador_threads(cola_in, snapshot_global, intervalo=2.0):
+ESTADOS = {
+    'R': 'Running', 'S': 'Sleeping', 'D': 'Disk Sleep', 'Z': 'Zombie',
+    'T': 'Stopped', 't': 'Tracing Stop', 'X': 'Dead', 'x': 'Dead',
+    'K': 'Wakekill', 'W': 'Waking', 'P': 'Parked'
+}
+
+
+def leer_stat_thread(pid, tid):
+    """Lee /proc/<pid>/task/<tid>/stat y devuelve (estado, utime, stime)."""
+    with open(f"/proc/{pid}/task/{tid}/stat", 'r') as f:
+        contenido = f.read()
+        pos_cierre = contenido.rfind(')')
+        resto = contenido[pos_cierre + 1:].strip().split()
+        estado_letra = resto[0]
+        utime = int(resto[11])
+        stime = int(resto[12])
+        return estado_letra, utime, stime
+
+
+def leer_nombre_thread(pid, tid):
+    try:
+        with open(f"/proc/{pid}/task/{tid}/comm", 'r') as f:
+            return f.read().strip()
+    except (FileNotFoundError, PermissionError):
+        return "?"
+
+
+def iniciar_analizador_threads(cola_in, snapshot_global, intervalo_compartido):
     """
-    Proceso que lee PIDs, cuenta los hilos (LWPs) en /proc/<pid>/task/
-    y actualiza el snapshot global.
+    Proceso que lee PIDs, enumera los threads (LWPs) de cada uno en
+    /proc/<pid>/task/, y calcula estado + %CPU por thread usando delta
+    de jiffies (mismo criterio que sistema.py, pero a nivel de hilo).
     """
     print("[THREADS] Analizador listo y esperando PIDs...")
-    
+
+    HZ = os.sysconf('SC_CLK_TCK')
+    lecturas_previas = {}  # {(pid, tid): (jiffies_totales, timestamp)}
+
     while True:
         if not cola_in.empty():
             pids = cola_in.get()
             datos_threads = {}
-            
+            ahora = time.time()
+            claves_vistas = set()
+
             for pid in pids:
                 ruta_task = f"/proc/{pid}/task"
-                
+
                 try:
-                    # Listamos la carpeta task y contamos la cantidad de elementos
-                    cantidad_threads = len(os.listdir(ruta_task))
-                    datos_threads[pid] = {"cantidad_hilos": cantidad_threads}
-                    
-                except FileNotFoundError:
-                    pass
-                except PermissionError:
-                    pass
-                
+                    tids = os.listdir(ruta_task)
+                except (FileNotFoundError, PermissionError):
+                    continue
+
+                detalle = []
+
+                for tid in tids:
+                    clave = (pid, tid)
+                    claves_vistas.add(clave)
+
+                    try:
+                        estado_letra, utime, stime = leer_stat_thread(pid, tid)
+                    except (FileNotFoundError, IndexError, ValueError):
+                        continue
+
+                    jiffies_totales = utime + stime
+                    cpu_pct = 0.0
+
+                    if clave in lecturas_previas:
+                        jiffies_prev, ts_prev = lecturas_previas[clave]
+                        delta_jiffies = jiffies_totales - jiffies_prev
+                        delta_tiempo = ahora - ts_prev
+                        if delta_tiempo > 0:
+                            cpu_pct = (delta_jiffies / HZ / delta_tiempo) * 100
+
+                    lecturas_previas[clave] = (jiffies_totales, ahora)
+
+                    detalle.append({
+                        "tid": tid,
+                        "nombre": leer_nombre_thread(pid, tid),
+                        "estado": ESTADOS.get(estado_letra, estado_letra),
+                        "cpu_pct": round(cpu_pct, 1),
+                    })
+
+                datos_threads[pid] = {
+                    "cantidad_hilos": len(tids),
+                    "detalle": detalle,
+                }
+
+            for clave_vieja in list(lecturas_previas.keys()):
+                if clave_vieja not in claves_vistas:
+                    del lecturas_previas[clave_vieja]
+
             snapshot_global['threads'] = datos_threads
-            
-        time.sleep(intervalo)
+
+        time.sleep(intervalo_compartido.value)
