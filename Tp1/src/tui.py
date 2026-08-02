@@ -113,6 +113,9 @@ def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo):
     pin_pid = None
 
     while True:
+        altura, ancho = stdscr.getmaxyx()
+        filas_disponibles = max(1, altura - 5)
+
         tecla = stdscr.getch()
 
         if tecla == ord('q'):
@@ -124,14 +127,16 @@ def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo):
             fila_seleccionada = 0
 
         elif tecla == curses.KEY_DOWN:
-            scroll += 1
             fila_seleccionada += 1
+            if fila_seleccionada >= filas_disponibles:
+                fila_seleccionada = filas_disponibles - 1
+                scroll += 1
 
         elif tecla == curses.KEY_UP:
-            if scroll > 0:
-                scroll -= 1
             if fila_seleccionada > 0:
                 fila_seleccionada -= 1
+            elif scroll > 0:
+                scroll -= 1
 
         elif tecla == ord('c'):
             orden = {'pid': 'cpu', 'cpu': 'rss', 'rss': 'pid'}[orden]
@@ -169,8 +174,6 @@ def dibujar_interfaz(stdscr, snapshot_global, intervalos, limites_intervalo):
                 pin_pid = None if pin_pid == candidato else candidato
 
         stdscr.clear()
-        altura, ancho = stdscr.getmaxyx()
-        filas_disponibles = max(1, altura - 5)
 
         try:
             stdscr.addstr(0, 0, f"=== MONITOR DE PROCESOS (PID: {os.getpid()}) ===", curses.A_BOLD)
