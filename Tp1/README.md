@@ -1,7 +1,7 @@
 # TP1
 
 **Computación II — Universidad de Mendoza — 2026**
-**Alumno:** Matías Agustin Perez
+**Alumno:** Matias Agustin Perez
 
 ---
 
@@ -223,6 +223,14 @@ por defecto de la plataforma. En Linux (que es el entorno de ejecución exigido 
 vía Docker) el default es `fork`, que es el más rápido y el que permite que los procesos hijos
 hereden el estado del padre sin re-importar módulos. Como el proyecto no está pensado para
 correr en Windows/macOS, no se justificó pagar el costo de `spawn` solo por portabilidad.
+
+### ¿Por qué los intervalos elegidos por defecto?
+
+Los intervalos por defecto se asignaron basándose en la volatilidad de los datos y el costo de obtenerlos:
+- **Resumen, Sistema, Sistema Global y Threads (2.0s):** Son las métricas más dinámicas. El CPU%, el estado (Running/Sleeping) y la creación/destrucción de hilos cambian constantemente, por lo que requieren un refresco rápido para que el monitor se sienta "en vivo", similar a la experiencia de `htop`.
+- **Memoria (3.0s):** La memoria cambia, pero requiere un procesamiento ligeramente más pesado (leer y clasificar `maps` y `status`), por lo que un intervalo intermedio es ideal para no saturar de I/O el sistema.
+- **FDs (5.0s):** Leer `/proc/<pid>/fd/` y hacer `readlink` por cada archivo abierto es una operación de I/O intensiva, especialmente en procesos grandes como navegadores web o bases de datos. Además, la lista de descriptores de archivos no suele mutar tan frenéticamente como el uso de CPU.
+- **Señales y Scheduling (10.0s):** Son configuraciones que, por lo general, se establecen al inicio de la vida de un proceso (como el `nice`, las máscaras de señales ignoradas o la política de scheduling) y rara vez cambian durante su ejecución. Refrescarlas rápido sería un desperdicio de ciclos de CPU.
 
 ---
 
