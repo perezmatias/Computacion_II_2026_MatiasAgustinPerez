@@ -69,8 +69,8 @@ Además de la navegación por teclado, el monitor responde a `SIGUSR2` para alte
 más campos de memoria, FDs individuales, hilos individuales, etc.):
 
 ```bash
-docker compose exec monitor sh -c "ps aux | grep main.py"
-docker compose exec monitor kill -USR2 <PID>
+docker compose exec monitor cat /proc/1/cmdline | tr '\0' ' '; echo 
+docker compose exec monitor sh -c "kill -USR2 1"
 ```
 
 Cuando está activo, aparece la palabra `VERBOSE` en la barra de estado de la TUI.
@@ -324,11 +324,11 @@ docker compose run --rm monitor
 Necesitás el PID del proceso `main.py` **dentro** del contenedor. En otra terminal:
 
 ```bash
-docker compose exec monitor sh -c "ps aux | grep main.py"
-docker compose exec monitor kill -USR1 <PID>   # genera dump_estado.json
-docker compose exec monitor kill -HUP <PID>    # recarga config.json en caliente
-docker compose exec monitor kill -USR2 <PID>   # toggle de modo verbose
-docker compose exec monitor kill -TERM <PID>   # shutdown limpio (igual a Ctrl+C)
+docker compose exec monitor cat /proc/1/cmdline | tr '\0' ' '; echo
+docker compose exec monitor sh -c "kill -USR1 1"
+docker compose exec monitor sh -c "kill -HUP 1"
+docker compose exec monitor sh -c "kill -USR2 1"
+docker compose exec monitor sh -c "kill -TERM 1"
 ```
 
 El archivo `dump_estado.json` se genera en el directorio del proyecto (queda visible en el
@@ -408,6 +408,21 @@ host gracias al volumen montado en `docker-compose.yml`).
 - **No se probó en sistemas con miles de procesos activos** ni se midió el uso de memoria del
   proceso `Manager` bajo esa carga.
 
+
+- **El número de procesos visibles depende del PID namespace.** Corriendo con
+  `docker compose run --rm monitor`, el contenedor tiene su propio PID
+  namespace: `/proc` solo expone los procesos que corren dentro de ese
+  namespace (el monitor + sus 8 procesos hijos + algunos procesos base de la
+  imagen), no los del host, aunque el usuario haya lanzado Docker desde ahí.
+  Corriendo directo en el host (`python3 src/main.py`), el monitor ve el
+  `/proc` real del sistema y por lo tanto muchos más procesos. Esto es
+  comportamiento esperado del aislamiento de namespaces de Docker (visto en
+  el curso al hablar de procesos y su entorno), no una limitación del código
+  del monitor.
+
+  **El número de procesos visibles depende del PID namespace.** Corriendo con docker compose run --rm monitor, el contenedor tiene su propio PID namespace: /proc solo expone los procesos que corren dentro de ese namespace (el monitor + sus 8 procesos hijos + algunos procesos base de la imagen), no los del host, aunque el usuario haya lanzado Docker desde ahí. Corriendo directo en el host (python3 src/main.py), el monitor ve el /proc real del sistema y por lo tanto muchos más procesos. Esto es comportamiento esperado del aislamiento de namespaces de Docker (visto en el curso al hablar de procesos y su entorno), no una limitación del código del monitor.
+
+  **El conteo de procesos entre /proc y lo que muestra la TUI puede diferir levemente en un instante dado.** Es un caso de TOCTOU (Time-Of-Check-To- Time-Of-Use) inherente a monitorear /proc como snapshot: entre que el recolector lista los PIDs y que cada analizador logra leer /proc/<pid>/status de cada uno, algún proceso puede haber terminado — incluso el propio comando usado para verificar esto desde afuera (ls /proc | grep ...) agrega temporalmente sus propios PIDs (sh, ls, grep) a la cuenta mientras corre. Se maneja con except FileNotFoundError: pass en cada analizador, descartando ese PID de esa vuelta sin que el monitor falle — el mismo comportamiento que tiene htop u otras herramientas de monitoreo en vivo.
 ---
 
 ## 7. Decisiones sobre la TUI
