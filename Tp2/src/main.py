@@ -19,6 +19,8 @@ class TareaPayload(BaseModel):
     urls: list[str] = []
     texto: str = ""
     iteraciones: int = 100000
+    tiempo: int = 5
+    timeout: float = 10.0
 
 async def descargar_url(url: str):
     inicio = time.time()
@@ -51,45 +53,45 @@ async def worker(worker_id: int):
             tarea_data = await task_queue.get()
             tarea_id = tarea_data["id"]
             tipo_tarea = tarea_data["tipo"]
+            timeout_val = tarea_data.get("timeout", 10.0)
             
-            # Guardamos el estado y la referencia a ESTA corrutina
             tareas_db[tarea_id]["estado"] = "ejecutando"
             tareas_db[tarea_id]["task"] = asyncio.current_task()
             
-            print(f"Worker {worker_id} ejecutando tarea {tarea_id} ({tipo_tarea})")
+            print(f"Worker {worker_id} ejecutando tarea {tarea_id} ({tipo_tarea}) con timeout {timeout_val}s")
             
-            if tipo_tarea == "esperar":
-                await asyncio.sleep(5)
+            # Encapsulamos la lógica para poder aplicarle el timeout
+            async def ejecutar_logica():
+                if tipo_tarea == "esperar":
+                    await asyncio.sleep(tarea_data.get("tiempo", 5))
+                elif tipo_tarea == "descargar":
+                    urls = tarea_data.get("urls", [])
+                    corrutinas = [descargar_url(url) for url in urls]
+                    tareas_db[tarea_id]["resultado"] = await asyncio.gather(*corrutinas)
+                elif tipo_tarea == "hashear":
+                    texto = tarea_data.get("texto", "")
+                    iteraciones = tarea_data.get("iteraciones", 100000)
+                    tareas_db[tarea_id]["resultado"] = await loop.run_in_executor(
+                        process_pool, calcular_hash_pesado, texto, iteraciones
+                    )
+
+            try:
+                # Intentamos ejecutar la lógica con el tiempo límite
+                await asyncio.wait_for(ejecutar_logica(), timeout=timeout_val)
+                tareas_db[tarea_id]["estado"] = "completada"
+            except asyncio.TimeoutError:
+                print(f"Worker {worker_id}: Tarea {tarea_id} FALLIDA por timeout")
+                tareas_db[tarea_id]["estado"] = "fallida"
+                tareas_db[tarea_id]["error"] = "Timeout excedido"
                 
-            elif tipo_tarea == "descargar":
-                urls = tarea_data.get("urls", [])
-                corrutinas = [descargar_url(url) for url in urls]
-                tareas_db[tarea_id]["resultado"] = await asyncio.gather(*corrutinas)
-                
-            elif tipo_tarea == "hashear":
-                texto = tarea_data.get("texto", "")
-                iteraciones = tarea_data.get("iteraciones", 100000)
-                resultado = await loop.run_in_executor(
-                    process_pool, 
-                    calcular_hash_pesado, 
-                    texto, 
-                    iteraciones
-                )
-                tareas_db[tarea_id]["resultado"] = resultado
-                
-            tareas_db[tarea_id]["estado"] = "completada"
-            # Limpiamos la referencia para no gastar memoria
             tareas_db[tarea_id].pop("task", None)
-            
             task_queue.task_done()
             
         except asyncio.CancelledError:
-            # Si nos cancelan, capturamos la excepción y actualizamos el estado
             print(f"Worker {worker_id}: Tarea {tarea_id} CANCELADA")
             tareas_db[tarea_id]["estado"] = "cancelada"
             tareas_db[tarea_id].pop("task", None)
             task_queue.task_done()
-            # No hacemos break porque queremos que el worker siga vivo para otras tareas
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -112,14 +114,15 @@ async def encolar_tarea(payload: TareaPayload):
         "tipo": payload.tipo,
         "urls": payload.urls,
         "texto": payload.texto,
-        "iteraciones": payload.iteraciones
+        "iteraciones": payload.iteraciones,
+        "tiempo": payload.tiempo,
+        "timeout": payload.timeout
     })
     
     return {"id": tarea_id, "estado": "pendiente"}
 
 @app.get("/tareas")
 async def listar_tareas():
-    # Devolvemos todo menos los objetos Task, que no son serializables a JSON
     return {
         tid: {k: v for k, v in info.items() if k != "task"}
         for tid, info in tareas_db.items()
@@ -140,17 +143,15 @@ async def cancelar_tarea(id: str):
         
     estado_actual = tareas_db[id]["estado"]
     
-    if estado_actual == "completada" or estado_actual == "cancelada":
+    if estado_actual in ["completada", "cancelada", "fallida"]:
         return {"mensaje": f"La tarea ya estaba {estado_actual}"}
         
     if estado_actual == "ejecutando":
-        # Extraemos el objeto Task y le pedimos que se cancele
         task_obj = tareas_db[id].get("task")
         if task_obj:
             task_obj.cancel()
             return {"mensaje": "Cancelación solicitada al worker"}
             
-    # Si estaba "pendiente" (en la cola, aún no la tomó ningún worker)
     if estado_actual == "pendiente":
         tareas_db[id]["estado"] = "cancelada"
         return {"mensaje": "Tarea cancelada antes de ejecutarse"}
