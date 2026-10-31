@@ -4,7 +4,7 @@ import time
 import hashlib
 from contextlib import asynccontextmanager
 from concurrent.futures import ProcessPoolExecutor
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import httpx
 import uvicorn
@@ -12,7 +12,6 @@ import uvicorn
 task_queue = asyncio.Queue()
 WORKERS_COUNT = 3
 tareas_db = {}
-# Executor global basado en procesos para tareas CPU-bound
 process_pool = ProcessPoolExecutor(max_workers=2)
 
 class TareaPayload(BaseModel):
@@ -40,7 +39,6 @@ async def descargar_url(url: str):
     }
 
 def calcular_hash_pesado(texto: str, iteraciones: int):
-    """Función puramente CPU-bound. Se ejecuta en otro proceso."""
     resultado = texto.encode()
     for _ in range(iteraciones):
         resultado = hashlib.sha256(resultado).digest()
@@ -54,7 +52,10 @@ async def worker(worker_id: int):
             tarea_id = tarea_data["id"]
             tipo_tarea = tarea_data["tipo"]
             
+            # Guardamos el estado y la referencia a ESTA corrutina
             tareas_db[tarea_id]["estado"] = "ejecutando"
+            tareas_db[tarea_id]["task"] = asyncio.current_task()
+            
             print(f"Worker {worker_id} ejecutando tarea {tarea_id} ({tipo_tarea})")
             
             if tipo_tarea == "esperar":
@@ -68,7 +69,6 @@ async def worker(worker_id: int):
             elif tipo_tarea == "hashear":
                 texto = tarea_data.get("texto", "")
                 iteraciones = tarea_data.get("iteraciones", 100000)
-                # Delegamos el cálculo pesado para no bloquear el event loop
                 resultado = await loop.run_in_executor(
                     process_pool, 
                     calcular_hash_pesado, 
@@ -78,9 +78,18 @@ async def worker(worker_id: int):
                 tareas_db[tarea_id]["resultado"] = resultado
                 
             tareas_db[tarea_id]["estado"] = "completada"
+            # Limpiamos la referencia para no gastar memoria
+            tareas_db[tarea_id].pop("task", None)
+            
             task_queue.task_done()
+            
         except asyncio.CancelledError:
-            break
+            # Si nos cancelan, capturamos la excepción y actualizamos el estado
+            print(f"Worker {worker_id}: Tarea {tarea_id} CANCELADA")
+            tareas_db[tarea_id]["estado"] = "cancelada"
+            tareas_db[tarea_id].pop("task", None)
+            task_queue.task_done()
+            # No hacemos break porque queremos que el worker siga vivo para otras tareas
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -110,15 +119,41 @@ async def encolar_tarea(payload: TareaPayload):
 
 @app.get("/tareas")
 async def listar_tareas():
-    return tareas_db
+    # Devolvemos todo menos los objetos Task, que no son serializables a JSON
+    return {
+        tid: {k: v for k, v in info.items() if k != "task"}
+        for tid, info in tareas_db.items()
+    }
 
 @app.get("/tareas/{id}")
 async def obtener_tarea(id: str):
-    return tareas_db.get(id, {"error": "Tarea no encontrada"})
+    if id not in tareas_db:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    tarea_info = tareas_db[id].copy()
+    tarea_info.pop("task", None)
+    return tarea_info
 
 @app.delete("/tareas/{id}")
 async def cancelar_tarea(id: str):
-    return {"mensaje": f"Tarea {id} cancelada (simulado)"}
+    if id not in tareas_db:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+        
+    estado_actual = tareas_db[id]["estado"]
+    
+    if estado_actual == "completada" or estado_actual == "cancelada":
+        return {"mensaje": f"La tarea ya estaba {estado_actual}"}
+        
+    if estado_actual == "ejecutando":
+        # Extraemos el objeto Task y le pedimos que se cancele
+        task_obj = tareas_db[id].get("task")
+        if task_obj:
+            task_obj.cancel()
+            return {"mensaje": "Cancelación solicitada al worker"}
+            
+    # Si estaba "pendiente" (en la cola, aún no la tomó ningún worker)
+    if estado_actual == "pendiente":
+        tareas_db[id]["estado"] = "cancelada"
+        return {"mensaje": "Tarea cancelada antes de ejecutarse"}
 
 @app.get("/estadisticas")
 async def obtener_estadisticas():
