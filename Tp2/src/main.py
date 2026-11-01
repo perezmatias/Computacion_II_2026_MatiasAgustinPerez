@@ -72,6 +72,7 @@ async def worker(worker_id: int):
                 elif tipo_tarea == "hashear":
                     texto = tarea_data.get("texto", "")
                     iteraciones = tarea_data.get("iteraciones", 100000)
+                    # EJECUCIÓN ASÍNCRONA: Delega a un proceso hijo para no bloquear el loop
                     tareas_db[tarea_id]["resultado"] = await loop.run_in_executor(
                         process_pool, calcular_hash_pesado, texto, iteraciones
                     )
@@ -92,36 +93,25 @@ async def worker(worker_id: int):
             tareas_db[tarea_id]["estado"] = "cancelada"
             tareas_db[tarea_id].pop("task", None)
             task_queue.task_done()
-            # Al apagar, el worker rompe el bucle aquí para terminar limpiamente
             break
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Todo esto pasa ANTES de que arranque el servidor
     print("Iniciando workers...")
     workers = [asyncio.create_task(worker(i)) for i in range(WORKERS_COUNT)]
     
-    # 2. El servidor cede el control a FastAPI y recibe peticiones
     yield
     
-    # 3. Todo esto pasa CUANDO se manda la señal de apagado (Ctrl+C)
     print("Iniciando apagado ordenado del servidor...")
-    
-    # Cancelar las tareas en ejecución para que terminen rápido
     for w in workers:
         w.cancel()
     
-    # Esperar a que los workers procesen la cancelación y terminen su ciclo
     await asyncio.gather(*workers, return_exceptions=True)
-    
-    # Cerrar el pool de procesos
     process_pool.shutdown(wait=True)
     
-    # Guardar el estado en disco
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     nombre_archivo = f"estado_{timestamp}.json"
     
-    # Limpiamos los objetos Task de tareas_db antes de guardarlo, ya que no son serializables
     estado_limpio = {
         tid: {k: v for k, v in info.items() if k != "task"}
         for tid, info in tareas_db.items()
@@ -188,7 +178,6 @@ async def cancelar_tarea(id: str):
 
 @app.get("/estadisticas")
 async def obtener_estadisticas():
-    # Calculamos dinámicamente las estadísticas en base a tareas_db
     estados = {"pendiente": 0, "ejecutando": 0, "completada": 0, "fallida": 0, "cancelada": 0}
     for info in tareas_db.values():
         if "estado" in info and info["estado"] in estados:
