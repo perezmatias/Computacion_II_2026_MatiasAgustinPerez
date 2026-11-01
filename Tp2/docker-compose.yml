@@ -3,5 +3,24 @@ services:
     build: .
     ports:
       - "8000:8000"
+    environment:
+      WORKERS: ${WORKERS:-3}
+      POOL_PROCESSES: ${POOL_PROCESSES:-2}
+      QUEUE_MAXSIZE: ${QUEUE_MAXSIZE:-1000}
+      DEFAULT_TIMEOUT: ${DEFAULT_TIMEOUT:-30}
+      SHUTDOWN_GRACE: ${SHUTDOWN_GRACE:-10}
+      HASH_MODE: ${HASH_MODE:-executor}   # "bloqueante" solo para la medición 2
+      DUMP_DIR: /data
     volumes:
-      - ./src:/app/src
+      - ./data:/data                       # los estado_*.json sobreviven al contenedor
+    # Docker manda SIGTERM y mata con SIGKILL al vencer este plazo.
+    # Tiene que ser MAYOR que SHUTDOWN_GRACE (+ margen para cancelar y volcar).
+    stop_grace_period: 20s
+    depends_on:
+      - mock
+
+  mock:                                    # servidor local con demora, para las mediciones
+    build: .
+    command: ["python", "-m", "src.mock_server"]
+    ports:
+      - "9000:9000"
