@@ -2,6 +2,8 @@ import asyncio
 import uuid
 import time
 import hashlib
+import json
+from datetime import datetime
 from contextlib import asynccontextmanager
 from concurrent.futures import ProcessPoolExecutor
 from fastapi import FastAPI, HTTPException
@@ -60,7 +62,6 @@ async def worker(worker_id: int):
             
             print(f"Worker {worker_id} ejecutando tarea {tarea_id} ({tipo_tarea}) con timeout {timeout_val}s")
             
-            # Encapsulamos la lógica para poder aplicarle el timeout
             async def ejecutar_logica():
                 if tipo_tarea == "esperar":
                     await asyncio.sleep(tarea_data.get("tiempo", 5))
@@ -76,7 +77,6 @@ async def worker(worker_id: int):
                     )
 
             try:
-                # Intentamos ejecutar la lógica con el tiempo límite
                 await asyncio.wait_for(ejecutar_logica(), timeout=timeout_val)
                 tareas_db[tarea_id]["estado"] = "completada"
             except asyncio.TimeoutError:
@@ -92,15 +92,45 @@ async def worker(worker_id: int):
             tareas_db[tarea_id]["estado"] = "cancelada"
             tareas_db[tarea_id].pop("task", None)
             task_queue.task_done()
+            # Al apagar, el worker rompe el bucle aquí para terminar limpiamente
+            break
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 1. Todo esto pasa ANTES de que arranque el servidor
+    print("Iniciando workers...")
     workers = [asyncio.create_task(worker(i)) for i in range(WORKERS_COUNT)]
+    
+    # 2. El servidor cede el control a FastAPI y recibe peticiones
     yield
+    
+    # 3. Todo esto pasa CUANDO se manda la señal de apagado (Ctrl+C)
+    print("Iniciando apagado ordenado del servidor...")
+    
+    # Cancelar las tareas en ejecución para que terminen rápido
     for w in workers:
         w.cancel()
+    
+    # Esperar a que los workers procesen la cancelación y terminen su ciclo
     await asyncio.gather(*workers, return_exceptions=True)
+    
+    # Cerrar el pool de procesos
     process_pool.shutdown(wait=True)
+    
+    # Guardar el estado en disco
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nombre_archivo = f"estado_{timestamp}.json"
+    
+    # Limpiamos los objetos Task de tareas_db antes de guardarlo, ya que no son serializables
+    estado_limpio = {
+        tid: {k: v for k, v in info.items() if k != "task"}
+        for tid, info in tareas_db.items()
+    }
+    
+    with open(nombre_archivo, "w") as f:
+        json.dump(estado_limpio, f, indent=4)
+        
+    print(f"Estado de las tareas guardado exitosamente en: {nombre_archivo}")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -158,7 +188,16 @@ async def cancelar_tarea(id: str):
 
 @app.get("/estadisticas")
 async def obtener_estadisticas():
-    return {"pendientes": 0, "ejecutando": 0, "completadas": 0}
+    # Calculamos dinámicamente las estadísticas en base a tareas_db
+    estados = {"pendiente": 0, "ejecutando": 0, "completada": 0, "fallida": 0, "cancelada": 0}
+    for info in tareas_db.values():
+        if "estado" in info and info["estado"] in estados:
+            estados[info["estado"]] += 1
+            
+    return {
+        "totales_por_estado": estados,
+        "workers_ocupados": estados["ejecutando"]
+    }
 
 if __name__ == '__main__':
     uvicorn.run("src.main:app", host='0.0.0.0', port=8000, reload=True)
