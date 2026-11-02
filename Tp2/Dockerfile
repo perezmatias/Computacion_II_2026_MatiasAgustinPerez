@@ -8,5 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
-# Sin shell intermedio: python es PID 1 y recibe SIGTERM directo de Docker.
 CMD ["python", "-m", "src.main"]
